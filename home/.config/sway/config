@@ -1,0 +1,217 @@
+#-------------------------------------------------------------------------------
+# Modifier:
+#-------------------------------------------------------------------------------
+set $mod Mod4
+
+#-------------------------------------------------------------------------------
+# Navigation:
+#-------------------------------------------------------------------------------
+set $left h
+set $down j
+set $up k
+set $right l
+
+#-------------------------------------------------------------------------------
+# Colors:
+#-------------------------------------------------------------------------------
+set $gray_0 #222222ee
+set $gray_1 #444444
+set $gray_2 #888888
+
+set $blue_0 #335588ee
+set $blue_1 #6688bb
+set $blue_2 #aaccff
+
+set $red_0  #883355ee
+set $red_1  #aa5577
+set $red_2  #ffaacc
+
+#-------------------------------------------------------------------------------
+# Applications:
+#-------------------------------------------------------------------------------
+set $bar waybar
+set $term alacritty
+set $menu $(ls "${HOME}/.local/bin" | wofi --show dmenu)
+
+#-------------------------------------------------------------------------------
+# Bindings:
+#-------------------------------------------------------------------------------
+floating_modifier $mod normal
+
+#-------------------------------------------------------------------------------
+# Bindings: Applications
+#-------------------------------------------------------------------------------
+bindsym $mod+d exec $menu
+bindsym $mod+Return exec $term
+
+#-------------------------------------------------------------------------------
+# Bindings: Sway
+#-------------------------------------------------------------------------------
+bindsym $mod+Shift+q kill
+bindsym $mod+Shift+c reload
+bindsym $mod+Shift+o exec swaylock -u -c 000000
+bindsym $mod+Shift+e exec swaynag -t warning -m 'Do you really want to exit?' -B 'Yes' 'swaymsg exit'
+
+#-------------------------------------------------------------------------------
+# Bindings: Focus
+#-------------------------------------------------------------------------------
+bindsym $mod+$left focus left
+bindsym $mod+$down focus down
+bindsym $mod+$up focus up
+bindsym $mod+$right focus right
+
+#-------------------------------------------------------------------------------
+# Bindings: Move
+#-------------------------------------------------------------------------------
+bindsym $mod+Shift+$left move left
+bindsym $mod+Shift+$down move down
+bindsym $mod+Shift+$up move up
+bindsym $mod+Shift+$right move right
+
+#-------------------------------------------------------------------------------
+# Bindings: Workspace
+#-------------------------------------------------------------------------------
+bindsym $mod+1 workspace number 1
+bindsym $mod+2 workspace number 2
+bindsym $mod+3 workspace number 3
+bindsym $mod+4 workspace number 4
+bindsym $mod+5 workspace number 5
+bindsym $mod+6 workspace number 6
+bindsym $mod+7 workspace number 7
+bindsym $mod+8 workspace number 8
+bindsym $mod+9 workspace number 9
+bindsym $mod+0 workspace number 10
+
+#-------------------------------------------------------------------------------
+# Bindings: Move to workspace
+#-------------------------------------------------------------------------------
+bindsym $mod+Shift+1 move container to workspace number 1
+bindsym $mod+Shift+2 move container to workspace number 2
+bindsym $mod+Shift+3 move container to workspace number 3
+bindsym $mod+Shift+4 move container to workspace number 4
+bindsym $mod+Shift+5 move container to workspace number 5
+bindsym $mod+Shift+6 move container to workspace number 6
+bindsym $mod+Shift+7 move container to workspace number 7
+bindsym $mod+Shift+8 move container to workspace number 8
+bindsym $mod+Shift+9 move container to workspace number 9
+bindsym $mod+Shift+0 move container to workspace number 10
+
+#-------------------------------------------------------------------------------
+# Bindings: Split
+#-------------------------------------------------------------------------------
+bindsym $mod+b splith
+bindsym $mod+v splitv
+
+#-------------------------------------------------------------------------------
+# Bindings: Layout
+#-------------------------------------------------------------------------------
+bindsym $mod+s layout stacking
+bindsym $mod+w layout tabbed
+bindsym $mod+e layout toggle split
+
+#-------------------------------------------------------------------------------
+# Bindings: Fullscreen
+#-------------------------------------------------------------------------------
+bindsym $mod+f fullscreen
+
+#-------------------------------------------------------------------------------
+# Bindings: Floating
+#-------------------------------------------------------------------------------
+bindsym $mod+Shift+space floating toggle
+
+#-------------------------------------------------------------------------------
+# Bindings: Focus
+#-------------------------------------------------------------------------------
+bindsym $mod+space focus mode_toggle
+bindsym $mod+a focus parent
+
+#-------------------------------------------------------------------------------
+# Bindings: Scratchpad
+#-------------------------------------------------------------------------------
+bindsym $mod+Shift+minus move scratchpad
+bindsym $mod+minus scratchpad show
+
+#-------------------------------------------------------------------------------
+# Bindings: Resize
+#-------------------------------------------------------------------------------
+bindsym $mod+r mode "resize"
+
+mode "resize" {
+    bindsym $left resize shrink width 10px
+    bindsym $down resize grow height 10px
+    bindsym $up resize shrink height 10px
+    bindsym $right resize grow width 10px
+    bindsym Return mode "default"
+    bindsym Escape mode "default"
+}
+
+#-------------------------------------------------------------------------------
+# Client:
+#-------------------------------------------------------------------------------
+client.focused          $blue_1 $blue_0 $blue_2 $blue_1 $blue_1
+client.focused_inactive $gray_1 $gray_0 $gray_2 $gray_1 $gray_1
+client.unfocused        $gray_1 $gray_0 $gray_2 $gray_1 $gray_1
+client.urgent           $red_1  $red_0  $red_2  $red_1  $red_1
+
+#-------------------------------------------------------------------------------
+# Border:
+#-------------------------------------------------------------------------------
+default_border normal 1
+default_floating_border normal 1
+
+#-------------------------------------------------------------------------------
+# Titlebar:
+#-------------------------------------------------------------------------------
+titlebar_border_thickness 1
+titlebar_padding 8 8
+
+#-------------------------------------------------------------------------------
+# Gaps:
+#-------------------------------------------------------------------------------
+gaps inner 1
+
+#-------------------------------------------------------------------------------
+# Font:
+#-------------------------------------------------------------------------------
+font pango: Terminus (TTF) 12px
+
+#-------------------------------------------------------------------------------
+# Floating:
+#-------------------------------------------------------------------------------
+for_window [title=".*"] floating enable
+
+#-------------------------------------------------------------------------------
+# Seat:
+#-------------------------------------------------------------------------------
+seat seat0 xcursor_theme Adwaita
+
+#-------------------------------------------------------------------------------
+# Keyboard:
+#-------------------------------------------------------------------------------
+input type:keyboard xkb_layout pl
+
+#-------------------------------------------------------------------------------
+# Monitor:
+#-------------------------------------------------------------------------------
+output DP-1 bg "#000000" solid_color
+output DP-1 mode 3840x2160@120.00Hz
+
+#-------------------------------------------------------------------------------
+# Bar:
+#-------------------------------------------------------------------------------
+bar {
+    mode hide
+    modifier $mod
+    position bottom
+    swaybar_command $bar
+}
+
+#-------------------------------------------------------------------------------
+# Gsettings:
+#-------------------------------------------------------------------------------
+exec_always {
+    gsettings set org.gnome.desktop.interface gtk-theme "Adwaita"
+    gsettings set org.gnome.desktop.interface icon-theme "Adwaita"
+    gsettings set org.gnome.desktop.interface cursor-theme "Adwaita"
+    gsettings set org.gnome.desktop.interface font-name "Sans 9"
+}

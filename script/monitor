@@ -1,0 +1,89 @@
+#!/bin/bash
+
+function find_hwmon_name
+{
+    local NAME="${1}"
+    local DIRECTORIES="/sys/class/hwmon/*"
+
+    for DIRECTORY in ${DIRECTORIES}; do
+        if [ "${NAME}" = "$(cat "${DIRECTORY}/name")" ]; then
+            echo "${DIRECTORY}"
+        fi
+    done
+}
+
+function find_hwmon_label
+{
+    local LABEL="${1}"
+    local DIRECTORY="${2}"
+
+    local FILES="${DIRECTORY}/*"
+
+    for FILE in ${FILES}; do
+        if [ "${FILE: -6}" = "_label" ]; then
+            if [ "${LABEL}" = "$(cat "${FILE}")" ]; then
+                echo "${FILE}"
+            fi
+        fi
+    done
+}
+
+function find_hwmon_temp
+{
+    local NAME="${1}"
+    local LABEL="${2}"
+
+    local DIRECTORY="$(find_hwmon_name "${NAME}")"
+
+    if [ -n "${DIRECTORY}" ]; then
+        local FILE_LABEL="$(find_hwmon_label "${LABEL}" "${DIRECTORY}")"
+        local FILE_TEMP="${FILE_LABEL:0:-6}_input"
+
+        echo "${FILE_TEMP}"
+    fi
+}
+
+function find_used_ram
+{
+    local FILE="${1}"
+
+    local RAM_TOTAL=""
+    local RAM_AVAILABLE=""
+
+    while read -r PARAMETER VALUE _; do
+        if [ "${PARAMETER}" = "MemTotal:" ]; then
+            RAM_TOTAL="${VALUE}"
+        elif [ "${PARAMETER}" = "MemAvailable:" ]; then
+            RAM_AVAILABLE="${VALUE}"
+        fi
+    done < "${FILE}"
+
+    local RAM_USED="$(("${RAM_TOTAL}"-"${RAM_AVAILABLE}"))"
+
+    echo "$(("${RAM_USED}" / 1000))"
+}
+
+function main
+{
+    local CPU_NAME="k10temp"
+    local CPU_LABEL="Tctl"
+    local CPU_FILE="$(find_hwmon_temp "${CPU_NAME}" "${CPU_LABEL}")"
+
+    local GPU_NAME="amdgpu"
+    local GPU_LABEL="junction"
+    local GPU_FILE="$(find_hwmon_temp "${GPU_NAME}" "${GPU_LABEL}")"
+
+    local RAM_FILE="/proc/meminfo"
+
+    while true; do
+        local CPU_TEMP="$(head -c 2 "${CPU_FILE}")"
+        local GPU_TEMP="$(head -c 2 "${GPU_FILE}")"
+        local RAM_USED="$(find_used_ram "${RAM_FILE}")"
+
+        echo "CPU: ${CPU_TEMP}°, GPU: ${GPU_TEMP}°, RAM: ${RAM_USED} MB"
+
+        sleep 2s
+    done
+}
+
+main "${@}"

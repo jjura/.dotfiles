@@ -1,0 +1,638 @@
+#!/bin/bash
+
+#-------------------------------------------------------------------------------
+# Function: uuid <partition>
+#-------------------------------------------------------------------------------
+function uuid
+{
+    local PARTITION="${1}"
+
+    local UUIDS="$(find /dev/disk/by-uuid -type l)"
+
+    for UUID in ${UUIDS}; do
+        local NAME="$(readlink -f "${UUID}")"
+
+        if [ "${NAME}" = "${PARTITION}" ]; then
+            basename "${UUID}"
+        fi
+    done
+}
+
+#-------------------------------------------------------------------------------
+# Function: execute <mountpoint> <function> <arguments>
+#-------------------------------------------------------------------------------
+function execute
+{
+    local MOUNTPOINT="${1}"
+    local USERNAME="${2}"
+    local FUNCTION="${3}"
+    local ARGUMENTS="${*:4}"
+
+    export -f uuid "${FUNCTION?}"
+
+    chroot --userspec "${USERNAME}" "${MOUNTPOINT}" /bin/bash -c "HOME=/home/${USERNAME} ${FUNCTION} ${ARGUMENTS}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: check_superuser
+#-------------------------------------------------------------------------------
+function check_superuser
+{
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "$(basename "${0}"): must be called as a root."
+        exit
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: check_arguments <arguments>
+#-------------------------------------------------------------------------------
+function check_arguments
+{
+    if [ ${#} -ne 4 ]; then
+        echo "Usage: $(basename "${0}")" \
+            "<device>"                   \
+            "<interface>"                \
+            "<hostname>"                 \
+            "<username>"
+        exit
+    fi
+
+    local DEVICE="${1}"
+
+    if [ ! -b "${DEVICE}" ]; then
+        echo "$(basename "${0}"): device ${DEVICE} doesn't exist."
+        exit
+    fi
+
+    local INTERFACE="${2}"
+
+    if [ ! -L "/sys/class/net/${INTERFACE}" ]; then
+        echo "$(basename "${0}"): interface ${INTERFACE} doesn't exist."
+        exit
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: check_packages
+#-------------------------------------------------------------------------------
+function check_packages
+{
+    local PACKAGES=(
+        "ca-certificates"
+        "debootstrap"
+        "dosfstools"
+        "e2fsprogs"
+        "gcc"
+        "git"
+        "libc-dev"
+        "make"
+        "parted"
+        "wget")
+
+    apt-get update
+    apt-get install -y --no-install-recommends "${PACKAGES[@]}"
+    apt-get clean
+}
+
+#-------------------------------------------------------------------------------
+# Function: partitions_create <device>
+#-------------------------------------------------------------------------------
+function partitions_create
+{
+    local DEVICE="${1}"
+
+    parted "${DEVICE}" --script                     \
+        mklabel gpt                                 \
+        mkpart "'boot partition'" 1MiB     1001MiB  \
+        mkpart "'root partition'" 1001MiB  10001MiB \
+        mkpart "'home partition'" 10001MiB 100%     \
+        set 1 esp on
+}
+
+#-------------------------------------------------------------------------------
+# Function: partitions_format <device>
+#-------------------------------------------------------------------------------
+function partitions_format
+{
+    local DEVICE="${1}"
+
+    mkfs.fat  -F32 "${DEVICE}p1" &> /dev/null
+    mkfs.ext4 -F   "${DEVICE}p2" &> /dev/null
+    mkfs.ext4 -F   "${DEVICE}p3" &> /dev/null
+}
+
+#-------------------------------------------------------------------------------
+# Function: partitions_mount <device> <mountpoint>
+#-------------------------------------------------------------------------------
+function partitions_mount
+{
+    local DEVICE="${1}"
+    local MOUNTPOINT="${2}"
+
+    mkdir -p "${MOUNTPOINT}"
+
+    mount -t ext4 "${DEVICE}p2" "${MOUNTPOINT}"
+
+    mkdir -p "${MOUNTPOINT}"/{boot,home}
+
+    mount -t ext4 "${DEVICE}p3" "${MOUNTPOINT}/home"
+    mount -t vfat "${DEVICE}p1" "${MOUNTPOINT}/boot"
+}
+
+#-------------------------------------------------------------------------------
+# Function: filesystem_create <mountpoint>
+#-------------------------------------------------------------------------------
+function filesystem_create
+{
+    local MOUNTPOINT="${1}"
+
+    debootstrap --variant minbase --arch amd64 testing "${MOUNTPOINT}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: filesystem_mount <mountpoint>
+#-------------------------------------------------------------------------------
+function filesystem_mount
+{
+    local MOUNTPOINT="${1}"
+
+    mount -t efivarfs efivarfs /sys/firmware/efi/efivars
+    mount -o rbind    /sys     "${MOUNTPOINT}/sys"
+    mount -o rbind    /dev     "${MOUNTPOINT}/dev"
+    mount -t tmpfs    tmpfs    "${MOUNTPOINT}/run"
+    mount -t tmpfs    tmpfs    "${MOUNTPOINT}/tmp"
+    mount -t proc     proc     "${MOUNTPOINT}/proc"
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_packages
+#-------------------------------------------------------------------------------
+function configure_packages
+{
+    local FILE="/etc/apt/sources.list"
+    local PACKAGES=(
+        "firmware-amd-graphics"
+        "fontconfig"
+        "libasound2"
+        "libegl1"
+        "libgl1"
+        "libxkbcommon0"
+        "linux-image-amd64"
+        "locales"
+        "polkitd"
+        "sudo"
+        "systemd-boot"
+        "ttf-bitstream-vera")
+
+    echo "deb http://deb.debian.org/debian testing main contrib non-free non-free-firmware" > "${FILE}"
+
+    apt-get update
+    apt-get install -y --no-install-recommends "${PACKAGES[@]}"
+    apt-get clean
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_root
+#-------------------------------------------------------------------------------
+function configure_root
+{
+    echo -e "root\nroot" | passwd root
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_user <username>
+#-------------------------------------------------------------------------------
+function configure_user
+{
+    local USERNAME="${1}"
+
+    useradd -m "${USERNAME}" -s /bin/bash
+    usermod -aG sudo,audio,video,input "${USERNAME}"
+
+    passwd "${USERNAME}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_hostname <hostname>
+#-------------------------------------------------------------------------------
+function configure_hostname
+{
+    local HOSTNAME="${1}"
+
+    local FILE_HOSTS="/etc/hosts"
+    local FILE_HOSTNAME="/etc/hostname"
+
+	cat <<- EOF > "${FILE_HOSTS}"
+		127.0.0.1 localhost
+		127.0.0.1 ${HOSTNAME}
+	EOF
+
+    echo -e "${HOSTNAME}" > "${FILE_HOSTNAME}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_location
+#-------------------------------------------------------------------------------
+function configure_location
+{
+    dpkg-reconfigure -fteletype tzdata
+    dpkg-reconfigure -fteletype locales
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_bootloader <device>
+#-------------------------------------------------------------------------------
+function configure_bootloader
+{
+    local DEVICE="${1}"
+
+    local FILE_ENTRY="/boot/loader/entries/debian.conf"
+    local FILE_LOADER="/boot/loader/loader.conf"
+
+    bootctl install
+
+	cat <<- EOF > "${FILE_ENTRY}"
+		title   Debian Testing
+		linux	/$(cd /boot && ls vmlinuz*)
+		initrd	/$(cd /boot && ls initrd*)
+		options root=UUID=$(uuid "${DEVICE}p2") rw
+	EOF
+
+    echo "default debian" > "${FILE_LOADER}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_mountpoints <device>
+#-------------------------------------------------------------------------------
+function configure_mountpoints
+{
+    local DEVICE="${1}"
+
+    local FILE="/etc/fstab"
+
+	cat <<- EOF > "${FILE}"
+		UUID=$(uuid "${DEVICE}p1") /boot vfat defaults 0 2
+		UUID=$(uuid "${DEVICE}p2") / ext4 defaults 0 1
+		UUID=$(uuid "${DEVICE}p3") /home ext4 defaults 0 2
+	EOF
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_network <interface>
+#-------------------------------------------------------------------------------
+function configure_network
+{
+    local INTERFACE="${1}"
+
+    local FILE="/etc/systemd/network/${INTERFACE}.network"
+
+	cat <<- EOF > "${FILE}"
+		[Match]
+		Name=${INTERFACE}
+		[Network]
+		DHCP=ipv4
+	EOF
+
+    systemctl enable systemd-networkd
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_fonts
+#-------------------------------------------------------------------------------
+function configure_fonts
+{
+    dpkg-reconfigure -fteletype fontconfig-config
+    dpkg-reconfigure -fteletype fontconfig
+}
+
+#-------------------------------------------------------------------------------
+# Function: install_files <source> <target>
+#-------------------------------------------------------------------------------
+function install_files
+{
+    local DIRECTORY_SOURCE="${1}"
+    local DIRECTORY_TARGET="${2}"
+
+    local FILES="$(find "${DIRECTORY_SOURCE}" -type f -printf '%P\n')"
+
+    for FILE in ${FILES}; do
+        local SOURCE="${DIRECTORY_SOURCE}/${FILE}"
+        local TARGET="${DIRECTORY_TARGET}/${FILE}"
+        local DIRECTORY="$(dirname "${TARGET}")"
+
+        if [ ! -d "${DIRECTORY}" ]; then
+            mkdir -p "${DIRECTORY}"
+        fi
+
+        cp "${SOURCE}" "${TARGET}"
+    done
+}
+
+#-------------------------------------------------------------------------------
+# Function: install_dotfiles <mountpoint> <username>
+#-------------------------------------------------------------------------------
+function install_dotfiles
+{
+    local MOUNTPOINT="${1}"
+    local USERNAME="${2}"
+
+    local REPOSITORY="https://github.com/jjura/.dotfiles"
+    local REPOSITORY_BRANCH="master"
+
+    local DIRECTORY="/tmp/$(basename "${REPOSITORY}")"
+
+    git clone "${REPOSITORY}" --branch "${REPOSITORY_BRANCH}" "${DIRECTORY}"
+
+    local DIRECTORY_HOME_SOURCE="${DIRECTORY}/home"
+    local DIRECTORY_HOME_TARGET="${MOUNTPOINT}/home/${USERNAME}"
+
+    install_files "${DIRECTORY_HOME_SOURCE}" "${DIRECTORY_HOME_TARGET}"
+
+    local DIRECTORY_ROOT_SOURCE="${DIRECTORY}/root"
+    local DIRECTORY_ROOT_TARGET="${MOUNTPOINT}"
+
+    install_files "${DIRECTORY_ROOT_SOURCE}" "${DIRECTORY_ROOT_TARGET}"
+
+    local SCRIPTS=(
+        "sandbox-manager"
+        "sandbox-menu"
+        "locally")
+
+    local DIRECTORY_SCRIPT_SOURCE="${DIRECTORY}/script"
+    local DIRECTORY_SCRIPT_TARGET="${MOUNTPOINT}/home/${USERNAME}/.local/bin"
+
+    mkdir -p "${DIRECTORY_SCRIPT_TARGET}"
+
+    for SCRIPT in "${SCRIPTS[@]}"; do
+        local SCRIPT_SOURCE="${DIRECTORY_SCRIPT_SOURCE}/${SCRIPT}"
+        local SCRIPT_TARGET="${DIRECTORY_SCRIPT_TARGET}/${SCRIPT}"
+
+        cp "${SCRIPT_SOURCE}" "${SCRIPT_TARGET}"
+    done
+
+    chown -R 1000:1000 "${DIRECTORY_HOME_TARGET}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: install_sandbox <mountpoint> <username>
+#-------------------------------------------------------------------------------
+function install_sandbox
+{
+    local MOUNTPOINT="${1}"
+    local USERNAME="${2}"
+
+    local REPOSITORY="https://github.com/jjura/sandbox.git"
+
+    local DIRECTORY_SOURCE="/tmp/$(basename "${REPOSITORY}")"
+    local DIRECTORY_TARGET="${MOUNTPOINT}/home/${USERNAME}/.local/bin"
+
+    git clone "${REPOSITORY}" "${DIRECTORY_SOURCE}"
+
+    local SOURCE="${DIRECTORY_SOURCE}/bin/sandbox"
+    local TARGET="${DIRECTORY_TARGET}/sandbox"
+
+    make -C "${DIRECTORY_SOURCE}"
+
+    cp "${SOURCE}" "${TARGET}"
+    chown 1000:1000 "${TARGET}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: install_fonts
+#-------------------------------------------------------------------------------
+function install_fonts
+{
+    local PACKAGES=(
+        "fonts-dejavu-core"
+        "fonts-noto-color-emoji"
+        "fonts-terminus")
+
+    local DIRECTORY="${HOME}/fonts"
+    local DIRECTORY_SOURCE="${DIRECTORY}/usr/share/fonts"
+    local DIRECTORY_TARGET="${HOME}/.local/share/fonts"
+
+    local TOOL_SCRIPT="${HOME}/.local/bin/locally"
+
+    "${TOOL_SCRIPT}" "${DIRECTORY}" "${PACKAGES[@]}"
+
+    cp -r "${DIRECTORY_SOURCE}" "${DIRECTORY_TARGET}"
+
+    fc-cache -vfr
+
+    rm -rf "${DIRECTORY}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: install_icons
+#-------------------------------------------------------------------------------
+function install_icons
+{
+    local PACKAGES=("adwaita-icon-theme")
+
+    local DIRECTORY="${HOME}/icons"
+    local DIRECTORY_SOURCE="${DIRECTORY}/usr/share/icons"
+    local DIRECTORY_TARGET="${HOME}/.local/share/icons"
+
+    local TOOL_SCRIPT="${HOME}/.local/bin/locally"
+
+    "${TOOL_SCRIPT}" "${DIRECTORY}" "${PACKAGES[@]}"
+
+    cp -r "${DIRECTORY_SOURCE}" "${DIRECTORY_TARGET}"
+
+    rm -rf "${DIRECTORY}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: install_mime
+#-------------------------------------------------------------------------------
+function install_mime
+{
+    local PACKAGES=("shared-mime-info")
+
+    local DIRECTORY="${HOME}/mime"
+    local DIRECTORY_SOURCE="${DIRECTORY}/usr/share/mime"
+    local DIRECTORY_TARGET="${HOME}/.local/share/mime"
+
+    local TOOL_SCRIPT="${HOME}/.local/bin/locally"
+    local TOOL_MIME="${DIRECTORY}/usr/bin/update-mime-database"
+    local TOOL_MIME_LD="${DIRECTORY}/usr/lib/x86_64-linux-gnu"
+
+    "${TOOL_SCRIPT}" "${DIRECTORY}" "${PACKAGES[@]}"
+
+    cp -r "${DIRECTORY_SOURCE}" "${DIRECTORY_TARGET}"
+
+    LD_LIBRARY_PATH="${TOOL_MIME_LD}" "${TOOL_MIME}" "${DIRECTORY_TARGET}"
+
+    rm -rf "${DIRECTORY}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: install_schemas
+#-------------------------------------------------------------------------------
+function install_schemas
+{
+    local PACKAGES=(
+        "libgtk-3-common"
+        "gsettings-desktop-schemas")
+
+    local DIRECTORY="${HOME}/schemas"
+    local DIRECTORY_SOURCE="${DIRECTORY}/usr/share/glib-2.0"
+    local DIRECTORY_TARGET="${HOME}/.local/share/glib-2.0"
+
+    local TOOL_SCRIPT="${HOME}/.local/bin/locally"
+    local TOOL_SCHEMAS="/lib/x86_64-linux-gnu/glib-2.0/glib-compile-schemas"
+
+    "${TOOL_SCRIPT}" "${DIRECTORY}" "${PACKAGES[@]}"
+
+    cp -r "${DIRECTORY_SOURCE}" "${DIRECTORY_TARGET}"
+
+    "${TOOL_SCHEMAS}" "${DIRECTORY_TARGET}/schemas"
+
+    rm -rf "${DIRECTORY}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: install_locally
+#-------------------------------------------------------------------------------
+function install_locally
+{
+    local PACKAGES=(
+        "alacritty libwayland-egl1"
+        "alsa-utils"
+        "file"
+        "firefox-esr libavcodec59"
+        "libglib2.0-bin"
+        "neovim"
+        "procps"
+        "sway"
+        "swaylock"
+        "waybar"
+        "wofi"
+        "x11-xkb-utils"
+        "xdg-utils"
+        "xwayland")
+
+    local LINKS=(
+        "alacritty alacritty"
+        "alsa-utils alsamixer"
+        "file file"
+        "firefox-esr firefox"
+        "libglib2.0-bin gsettings"
+        "neovim nvim"
+        "procps ps pkill"
+        "sway sway"
+        "swaylock swaylock"
+        "waybar waybar"
+        "wofi wofi"
+        "xdg-utils xdg-open xdg-mime")
+
+    local TOOL_SCRIPT="${HOME}/.local/bin/locally"
+
+    for PACKAGE in "${PACKAGES[@]}"; do
+        local PACKAGE_ENTRY=(${PACKAGE})
+        local PACKAGE_NAME="${PACKAGE_ENTRY[0]}"
+        local PACKAGE_DIRECTORY="${HOME}/.local/opt/${PACKAGE_NAME}"
+
+        "${TOOL_SCRIPT}" "${PACKAGE_DIRECTORY}" "${PACKAGE}"
+
+        for LINK in "${LINKS[@]}"; do
+            local LINK_ENTRY=(${LINK})
+            local LINK_NAME="${LINK_ENTRY[0]}"
+
+            if [ "${LINK_NAME}" = "${PACKAGE_NAME}" ]; then
+                for LINK_LINK in "${LINK_ENTRY[@]:1}"; do
+                    local LINK_DIRECTORY="${HOME}/.local/bin"
+                    local LINK_SOURCE="${PACKAGE_DIRECTORY}/${PACKAGE_NAME}"
+                    local LINK_TARGET="${LINK_DIRECTORY}/${LINK_LINK}"
+
+                    ln -s "${LINK_SOURCE}" "${LINK_TARGET}"
+                done
+            fi
+        done
+    done
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_file <username>
+#-------------------------------------------------------------------------------
+function configure_file
+{
+    local USERNAME="${1}"
+
+    local FILE="/home/${USERNAME}/.local/opt/file/file"
+    local LOCATION="\${DIRECTORY}/usr/lib/file/magic.mgc"
+
+    sed -i "s:\"\${@}\":-m \"${LOCATION}\" \"\${@}\":g" "${FILE}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_xdg_utils <username>
+#-------------------------------------------------------------------------------
+function configure_xdg_utils
+{
+    local USERNAME="${1}"
+
+    local FILE="/home/${USERNAME}/.local/opt/xdg-utils/usr/bin/xdg-mime"
+
+    sed -i "s:/usr/bin/file:file:g" "${FILE}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: configure_xwayland
+#-------------------------------------------------------------------------------
+function configure_xwayland
+{
+    local USERNAME="${1}"
+
+    ln -s "/home/${USERNAME}/.local/opt/xwayland/xwayland" "/usr/bin/Xwayland"
+    ln -s "/home/${USERNAME}/.local/opt/x11-xkb-utils/x11-xkb-utils" "/usr/bin/xkbcomp"
+}
+
+#-------------------------------------------------------------------------------
+# Function: main <device> <interface> <hostname> <username>
+#-------------------------------------------------------------------------------
+function main
+{
+    local DEVICE="${1}"
+    local INTERFACE="${2}"
+    local HOSTNAME="${3}"
+    local USERNAME="${4}"
+    local MOUNTPOINT="/mnt"
+
+    check_superuser
+    check_arguments         "${@}"
+    check_packages
+
+    partitions_create       "${DEVICE}"
+    partitions_format       "${DEVICE}"
+    partitions_mount        "${DEVICE}" "${MOUNTPOINT}"
+
+    filesystem_create       "${MOUNTPOINT}"
+    filesystem_mount        "${MOUNTPOINT}"
+
+    execute "${MOUNTPOINT}" "root" configure_packages
+    execute "${MOUNTPOINT}" "root" configure_root
+    execute "${MOUNTPOINT}" "root" configure_user           "${USERNAME}"
+    execute "${MOUNTPOINT}" "root" configure_hostname       "${HOSTNAME}"
+    execute "${MOUNTPOINT}" "root" configure_location
+    execute "${MOUNTPOINT}" "root" configure_bootloader     "${DEVICE}"
+    execute "${MOUNTPOINT}" "root" configure_mountpoints    "${DEVICE}"
+    execute "${MOUNTPOINT}" "root" configure_network        "${INTERFACE}"
+    execute "${MOUNTPOINT}" "root" configure_fonts
+
+    install_dotfiles        "${MOUNTPOINT}" "${USERNAME}"
+    install_sandbox         "${MOUNTPOINT}" "${USERNAME}"
+
+    execute "${MOUNTPOINT}" "${USERNAME}" install_fonts
+    execute "${MOUNTPOINT}" "${USERNAME}" install_icons
+    execute "${MOUNTPOINT}" "${USERNAME}" install_mime
+    execute "${MOUNTPOINT}" "${USERNAME}" install_schemas
+    execute "${MOUNTPOINT}" "${USERNAME}" install_locally
+
+    execute "${MOUNTPOINT}" "root" configure_file           "${USERNAME}"
+    execute "${MOUNTPOINT}" "root" configure_xdg_utils      "${USERNAME}"
+    execute "${MOUNTPOINT}" "root" configure_xwayland       "${USERNAME}"
+}
+
+main "${@}"

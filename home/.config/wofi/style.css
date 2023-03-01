@@ -1,0 +1,56 @@
+@define-color gray_0 alpha(#000000, 0.9);
+@define-color gray_1 #222222;
+@define-color gray_2 #444444;
+@define-color gray_3 #888888;
+@define-color blue_0 #335588;
+@define-color blue_1 #6688bb;
+@define-color blue_2 #aaccff;
+
+* {
+    background: none;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+    outline: none;
+    padding: 0;
+}
+
+window {
+    font-family: "Terminus (TTF)";
+    font-size: 12px;
+}
+
+#input {
+    background-color: @gray_1;
+    border: 1px solid @gray_2;
+    color: @gray_3;
+    padding: 8px;
+}
+
+#scroll {
+    background: @gray_0;
+    border: 1px solid @gray_2;
+    border-top: none;
+    padding: 1px;
+}
+
+#entry {
+    padding: 8px;
+}
+
+#entry:selected {
+    background-color: @blue_0;
+    border: 1px solid @blue_1;
+    padding: 7px;
+}
+
+#text {
+    color: @gray_3;
+}
+
+#text:selected {
+    color: @blue_2;
+}

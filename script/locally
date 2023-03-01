@@ -1,0 +1,361 @@
+#!/bin/bash
+
+#-------------------------------------------------------------------------------
+# Function: check_arguments
+#-------------------------------------------------------------------------------
+function check_arguments
+{
+    if [ ${#} -lt 2 ]; then
+        echo "Usage: $(basename "${0}") <directory> <packages>"
+        exit
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: check_directory
+#-------------------------------------------------------------------------------
+function check_directory
+{
+    local DIRECTORY="${1}"
+
+    if [ "${DIRECTORY:0:1}" != "/" ]; then
+        echo "$(basename "${0}"): path ${DIRECTORY} must be absolute."
+        exit
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: download_repository_package_list
+#-------------------------------------------------------------------------------
+function download_repository_package_list
+{
+    local DIRECTORY_STATE="${1}"
+    local DIRECTORY_CACHE="${2}"
+    local DIRECTORY_ARCHIVES="${3}"
+
+    echo "Downloading repository package list."
+
+    if ! apt-get update \
+        -o dir::state="${DIRECTORY_STATE}" \
+        -o dir::cache="${DIRECTORY_CACHE}" \
+        -o dir::cache::archives="${DIRECTORY_ARCHIVES}" \
+        -o debug::nolocking="true" &> /dev/null; then
+            echo "Cannot update package list."
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: download_repository_package
+#-------------------------------------------------------------------------------
+function download_repository_package
+{
+    local DIRECTORY_STATE="${1}"
+    local DIRECTORY_CACHE="${2}"
+    local DIRECTORY_ARCHIVES="${3}"
+    local PACKAGE="${4}"
+
+    echo "Downloading: ${PACKAGE}"
+
+    if ! apt-get install \
+        --no-install-recommends \
+        -o debug::nolocking="true" \
+        -o dir::state="${DIRECTORY_STATE}" \
+        -o dir::cache="${DIRECTORY_CACHE}" \
+        -o dir::cache::archives="${DIRECTORY_ARCHIVES}" \
+        -d -y "${PACKAGE}" &> /dev/null; then
+            echo "Cannot download package: ${PACKAGE}"
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: download_external_package
+#-------------------------------------------------------------------------------
+function download_external_package
+{
+    local DIRECTORY_PACKAGES="${1}"
+    local PACKAGE="${2}"
+
+    echo "Downloading: ${PACKAGE}"
+
+    if ! wget \
+        --no-hsts \
+        --content-disposition \
+        --no-check-certificate \
+        --directory-prefix "${DIRECTORY_PACKAGES}" \
+        "${PACKAGE}" &> /dev/null; then
+            echo "Cannot download package: ${PACKAGE}"
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: prepare_download_tools
+#-------------------------------------------------------------------------------
+function prepare_download_tools
+{
+    local DIRECTORY="${1}"
+    local PACKAGES="${2}"
+
+    local DIRECTORY_STATE="${DIRECTORY}/.state"
+    local DIRECTORY_CACHE="${DIRECTORY}/.cache"
+    local DIRECTORY_ARCHIVES="${DIRECTORY}/.archives"
+
+    mkdir -p \
+        "${DIRECTORY}" \
+        "${DIRECTORY_STATE}" \
+        "${DIRECTORY_CACHE}" \
+        "${DIRECTORY_ARCHIVES}"
+
+    local PACKAGES_TOOLS=""
+
+    for PACKAGE in ${PACKAGES}; do
+        if [ "${PACKAGE:0:8}" = "https://" ]; then
+            PACKAGES_TOOLS="${PACKAGES_TOOLS} wget"
+        fi
+    done
+
+    if [ -n "${PACKAGES_TOOLS}" ]; then
+        download_repository_package_list \
+            "${DIRECTORY_STATE}" \
+            "${DIRECTORY_CACHE}" \
+            "${DIRECTORY_ARCHIVES}"
+
+        for PACKAGE_TOOL in ${PACKAGES_TOOLS}; do
+            download_repository_package \
+                "${DIRECTORY_STATE}" \
+                "${DIRECTORY_CACHE}" \
+                "${DIRECTORY_ARCHIVES}" \
+                "${PACKAGE_TOOL}"
+        done
+
+        install_packages "${DIRECTORY}" "${DIRECTORY_ARCHIVES}"
+    fi
+
+    rm -rf "${DIRECTORY_STATE}"
+    rm -rf "${DIRECTORY_CACHE}"
+    rm -rf "${DIRECTORY_ARCHIVES}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: prepare_extraction_tools
+#-------------------------------------------------------------------------------
+function prepare_extraction_tools
+{
+    local DIRECTORY="${1}"
+    local DIRECTORY_PACKAGES="${2}"
+
+    local DIRECTORY_STATE="${DIRECTORY}/.state"
+    local DIRECTORY_CACHE="${DIRECTORY}/.cache"
+    local DIRECTORY_ARCHIVES="${DIRECTORY}/.archives"
+
+    mkdir -p \
+        "${DIRECTORY}" \
+        "${DIRECTORY_STATE}" \
+        "${DIRECTORY_CACHE}" \
+        "${DIRECTORY_ARCHIVES}"
+
+    local PACKAGES="${DIRECTORY_PACKAGES}/*"
+    local PACKAGES_TOOLS=""
+
+    for PACKAGE in ${PACKAGES}; do
+        if [ "${PACKAGE: -7}" = ".tar.gz" ]; then
+            PACKAGES_TOOLS="${PACKAGES_TOOLS} tar"
+        elif [ "${PACKAGE: -7}" = ".tar.xz" ]; then
+            PACKAGES_TOOLS="${PACKAGES_TOOLS} tar xz-utils"
+        elif [ "${PACKAGE: -8}" = ".tar.bz2" ]; then
+            PACKAGES_TOOLS="${PACKAGES_TOOLS} tar bzip2"
+        fi
+    done
+
+    if [ -n "${PACKAGES_TOOLS}" ]; then
+        download_repository_package_list \
+            "${DIRECTORY_STATE}" \
+            "${DIRECTORY_CACHE}" \
+            "${DIRECTORY_ARCHIVES}"
+
+        for PACKAGE_TOOL in ${PACKAGES_TOOLS}; do
+            download_repository_package \
+                "${DIRECTORY_STATE}" \
+                "${DIRECTORY_CACHE}" \
+                "${DIRECTORY_ARCHIVES}" \
+                "${PACKAGE_TOOL}"
+        done
+
+        install_packages "${DIRECTORY}" "${DIRECTORY_ARCHIVES}"
+    fi
+
+    rm -rf "${DIRECTORY_STATE}"
+    rm -rf "${DIRECTORY_CACHE}"
+    rm -rf "${DIRECTORY_ARCHIVES}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: prepare_path
+#-------------------------------------------------------------------------------
+function prepare_path
+{
+    local VARIABLE="${1}"
+    local DIRECTORY="${2}"
+    local FILTER="${3}"
+
+    local FILES="$(find "${DIRECTORY}" -mindepth 2 \
+        -type f ${FILTER} -exec dirname {} \; -or \
+        -type l ${FILTER} -exec dirname {} \;)"
+
+    FILES="$(echo "${FILES}" | sort --reverse | uniq)"
+
+    if [ "${VARIABLE}" = "PATH" ]; then
+        echo "export ${VARIABLE}=\"\${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin\""
+    else
+        echo "export ${VARIABLE}=\"\""
+    fi
+
+    for ENTRY in ${FILES}; do
+        ENTRY="$(realpath "${ENTRY}" --relative-to "${DIRECTORY}")"
+        ENTRY="${VARIABLE}=\"\${DIRECTORY}/${ENTRY}:\${${VARIABLE}}\""
+
+        echo "export ${ENTRY}"
+    done
+}
+
+#-------------------------------------------------------------------------------
+# Function: prepare_environment
+#-------------------------------------------------------------------------------
+function prepare_environment
+{
+    local DIRECTORY="${1}"
+
+    eval "$(prepare_path "PATH" "${DIRECTORY}" "-executable")"
+    eval "$(prepare_path "LD_LIBRARY_PATH" "${DIRECTORY}" "-name *.so*")"
+}
+
+#-------------------------------------------------------------------------------
+# Function: prepare_packages
+#-------------------------------------------------------------------------------
+function prepare_packages
+{
+    local DIRECTORY_STATE="${1}"
+    local DIRECTORY_CACHE="${2}"
+    local DIRECTORY_ARCHIVES="${3}"
+    local PACKAGES="${4}"
+
+    download_repository_package_list \
+        "${DIRECTORY_STATE}" \
+        "${DIRECTORY_CACHE}" \
+        "${DIRECTORY_ARCHIVES}"
+
+    for PACKAGE in ${PACKAGES}; do
+        if [ "${PACKAGE:0:8}" = "https://" ]; then
+            download_external_package \
+                "${DIRECTORY_ARCHIVES}" \
+                "${PACKAGE}"
+        else
+            download_repository_package \
+                "${DIRECTORY_STATE}" \
+                "${DIRECTORY_CACHE}" \
+                "${DIRECTORY_ARCHIVES}" \
+                "${PACKAGE}"
+        fi
+    done
+}
+
+#-------------------------------------------------------------------------------
+# Function: install_packages
+#-------------------------------------------------------------------------------
+function install_packages
+{
+    local DIRECTORY="${1}"
+    local DIRECTORY_ARCHIVES="${2}"
+
+    local PACKAGES="${DIRECTORY_ARCHIVES}/*.deb"
+    local ARCHIVES="${DIRECTORY_ARCHIVES}/*.tar*"
+
+    for PACKAGE in ${PACKAGES}; do
+        if [ -f "${PACKAGE}" ]; then
+            echo "Extracting package: $(basename "${PACKAGE}")"
+
+            dpkg-deb -x "${PACKAGE}" "${DIRECTORY}"
+        fi
+    done
+
+    for ARCHIVE in ${ARCHIVES}; do
+        if [ -f "${ARCHIVE}" ]; then
+            echo "Extracting archive: $(basename "${ARCHIVE}")"
+
+            tar xf "${ARCHIVE}" -C "${DIRECTORY}"
+        fi
+    done
+}
+
+#-------------------------------------------------------------------------------
+# Function: install_script
+#-------------------------------------------------------------------------------
+function install_script
+{
+    local DIRECTORY="${1}"
+
+    local SCRIPT="${DIRECTORY}/$(basename "${DIRECTORY}")"
+
+    local PATH_BIN="$(prepare_path "PATH" "${DIRECTORY}" "-executable")"
+    local PATH_LIB="$(prepare_path "LD_LIBRARY_PATH" "${DIRECTORY}" "-name *.so*")"
+
+    echo "#!/bin/bash" > "${SCRIPT}"
+    echo "DIRECTORY=\"\$(dirname \$(readlink -f -- \"\${0}\"))\"" >> "${SCRIPT}"
+
+    if [ -n "${PATH_BIN}" ]; then
+        echo "${PATH_BIN}" >> "${SCRIPT}"
+    fi
+
+    if [ -n "${PATH_LIB}" ]; then
+        echo "${PATH_LIB}" >> "${SCRIPT}"
+    fi
+
+    echo "exec \"\$(basename \"\${0}\")\" \"\${@}\"" >> "${SCRIPT}"
+
+    chmod 0755 "${SCRIPT}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: main
+#-------------------------------------------------------------------------------
+function main
+{
+    local DIRECTORY="${1}"
+    local PACKAGES="${*:2}"
+
+    check_arguments "${@}"
+    check_directory "${DIRECTORY}"
+
+    local DIRECTORY_TOOLS="${DIRECTORY}/.tools"
+    local DIRECTORY_STATE="${DIRECTORY}/.state"
+    local DIRECTORY_CACHE="${DIRECTORY}/.cache"
+    local DIRECTORY_ARCHIVES="${DIRECTORY}/.archives"
+
+    mkdir -p \
+        "${DIRECTORY}" \
+        "${DIRECTORY_STATE}" \
+        "${DIRECTORY_CACHE}" \
+        "${DIRECTORY_ARCHIVES}"
+
+    prepare_download_tools "${DIRECTORY_TOOLS}" "${PACKAGES}"
+    prepare_environment "${DIRECTORY_TOOLS}"
+    prepare_packages \
+        "${DIRECTORY_STATE}" \
+        "${DIRECTORY_CACHE}" \
+        "${DIRECTORY_ARCHIVES}" \
+        "${PACKAGES}"
+
+    rm -rf "${DIRECTORY_TOOLS}"
+
+    prepare_extraction_tools "${DIRECTORY_TOOLS}" "${DIRECTORY_ARCHIVES}"
+    prepare_environment "${DIRECTORY_TOOLS}"
+
+    install_packages "${DIRECTORY}" "${DIRECTORY_ARCHIVES}"
+    install_script "${DIRECTORY}"
+
+    rm -rf "${DIRECTORY_TOOLS}"
+    rm -rf "${DIRECTORY_STATE}"
+    rm -rf "${DIRECTORY_CACHE}"
+    rm -rf "${DIRECTORY_ARCHIVES}"
+}
+
+main "${@}"

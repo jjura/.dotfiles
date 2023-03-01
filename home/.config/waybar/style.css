@@ -1,0 +1,49 @@
+@define-color gray_0 alpha(#000000, 0.9);
+@define-color gray_1 #333333;
+@define-color gray_2 #444444;
+@define-color gray_3 #888888;
+
+* {
+    background: none;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+    outline: none;
+    padding: 0;
+}
+
+#waybar {
+    background: @gray_0;
+    border-top: 1px solid @gray_1;
+    font-family: "Terminus (TTF)";
+    font-size: 12px;
+}
+
+#workspaces button {
+    border-right: 1px solid @gray_1;
+    color: @gray_2;
+    padding: 16px;
+}
+
+#workspaces button.focused {
+    color: @gray_3;
+}
+
+#mode {
+    color: @gray_3;
+    padding: 16px;
+}
+
+#window {
+    color: @gray_3;
+}
+
+#clock,
+#custom-monitor {
+    border-left: 1px solid @gray_1;
+    color: @gray_3;
+    padding: 16px;
+}

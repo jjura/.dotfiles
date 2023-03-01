@@ -1,0 +1,71 @@
+#!/bin/bash
+
+#-------------------------------------------------------------------------------
+# Settings:
+#-------------------------------------------------------------------------------
+SANDBOX_MANAGER="${HOME}/.local/bin/sandbox-manager"
+SANDBOX_MENU="wofi"
+SANDBOX_TERMINAL="alacritty"
+
+#-------------------------------------------------------------------------------
+# Function: container_boot
+#-------------------------------------------------------------------------------
+function container_boot
+{
+    local CONTAINERS="$("${SANDBOX_MANAGER}" --container-list)"
+    local CONTAINER="$(printf "%s\n" "${CONTAINERS}" | "${SANDBOX_MENU}" --show dmenu)"
+
+    if [ -n "${CONTAINER}" ]; then
+        "${SANDBOX_TERMINAL}" -e sudo "${SANDBOX_MANAGER}" --container-execute "${CONTAINER}" "root" "/bin/login"
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: container_destroy
+#-------------------------------------------------------------------------------
+function container_destroy
+{
+    local CONTAINERS="$("${SANDBOX_MANAGER}" --container-list)"
+    local CONTAINER="$(printf "%s\n" "${CONTAINERS}" | "${SANDBOX_MENU}" --show dmenu)"
+
+    if [ -n "${CONTAINER}" ]; then
+        "${SANDBOX_TERMINAL}" -e sudo "${SANDBOX_MANAGER}" --container-destroy "${CONTAINER}"
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: base_update
+#-------------------------------------------------------------------------------
+function base_update
+{
+    local BASES="$("${SANDBOX_MANAGER}" --base-list)"
+    local BASE="$(printf "%s\n" "${BASES}" | "${SANDBOX_MENU}" --show dmenu)"
+
+    if [ -n "${BASE}" ]; then
+        "${SANDBOX_TERMINAL}" -e sudo "${SANDBOX_MANAGER}" --base-update "${BASE}"
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: main
+#-------------------------------------------------------------------------------
+function main
+{
+    local OPTIONS=(
+        "Container boot"
+        "Container destroy"
+        "Base update")
+
+    local OPTION="$(printf "%s\n" "${OPTIONS[@]}" | "${SANDBOX_MENU}" --show dmenu)"
+
+    case "${OPTION}" in
+        *"boot")
+            container_boot;;
+        *"destroy")
+            container_destroy;;
+        *"update")
+            base_update;;
+    esac
+}
+
+main

@@ -1,0 +1,22 @@
+1. Firefox:
+    - https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64
+    - libgtk-3-0
+    - libxtst6
+    - libdbus-glib-1-2
+    - libavcodec59
+    - apulse
+
+2. Google Chrome:
+    - https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+    - libgtk-3-0
+    - libnss3
+    - libgles2
+
+3. Discord:
+    - https://discordapp.com/api/download?platform=linux&format=deb
+    - libgtk-3-0
+    - libnss3
+    - libxss1
+    - libx11-xcb1
+    - libatomic1
+    - apulse

@@ -1,0 +1,18 @@
+{
+    "clock":
+    {
+        "format":       "{:%d.%m.%Y %H:%M}"
+    },
+    "custom/monitor":
+    {
+        "exec":         "exec monitor"
+    },
+    "height":           0,
+    "ipc":              true,
+    "layer":            "top",
+    "modules-left":     [ "sway/workspaces", "sway/mode" ],
+    "modules-center":   [ "sway/window" ],
+    "modules-right":    [ "custom/monitor", "clock" ],
+    "position":         "bottom",
+    "spacing":          0
+}

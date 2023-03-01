@@ -1,0 +1,65 @@
+#!/bin/bash
+
+#-------------------------------------------------------------------------------
+# Function: parse_output_line
+#-------------------------------------------------------------------------------
+function parse_output_line
+{
+    local DIRECTORY="${1}"
+    local LINE="${2}"
+
+    for WORD in ${LINE}; do
+        if [[ "${WORD}" == *".c" ]]; then
+			cat <<- EOF
+			{
+				"directory": "${DIRECTORY}",
+				"file": "${WORD}",
+				"command": "${LINE}"
+			},
+			EOF
+        fi
+    done
+}
+
+#-------------------------------------------------------------------------------
+# Function: parse_output
+#-------------------------------------------------------------------------------
+function parse_output
+{
+    local DIRECTORY="${1}"
+    local OUTPUT="${2}"
+
+    echo "["
+
+    while read -r LINE; do
+        parse_output_line "${DIRECTORY}" "${LINE}"
+    done <<< "${OUTPUT}"
+
+    echo "]"
+}
+
+#-------------------------------------------------------------------------------
+# Function: main
+#-------------------------------------------------------------------------------
+function main
+{
+    local ARGUMENT="${1}"
+
+    if [ -z "${ARGUMENT}" ]; then
+        echo "Usage: ${0} <directory>"
+        exit
+    fi
+
+    local DIRECTORY="$(realpath "${ARGUMENT}")"
+
+    if [ ! -d "${DIRECTORY}" ]; then
+        echo "Directory: ${DIRECTORY} doesn't exist."
+        exit
+    fi
+
+    local OUTPUT="$(make -C "${DIRECTORY}" -nw)"
+
+    parse_output "${DIRECTORY}" "${OUTPUT}"
+}
+
+main "${@}"

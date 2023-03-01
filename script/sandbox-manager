@@ -1,0 +1,369 @@
+#!/bin/bash
+
+#-------------------------------------------------------------------------------
+# Settings:
+#-------------------------------------------------------------------------------
+BIN="/home/lucas/.local/bin/sandbox"
+DIR="/home/lucas/.local/share/sandbox"
+
+#-------------------------------------------------------------------------------
+# Function: check_sudo <command>
+#-------------------------------------------------------------------------------
+function check_sudo
+{
+    local COMMAND="${1}"
+
+    if [ -z "${SUDO_USER}" ] || [ "$(id -u)" -ne 0 ]; then
+        echo "$(basename "${0}"): ${COMMAND} must be called as a sudo user."
+        exit
+    fi
+}
+
+#-------------------------------------------------------------------------------
+# Function: tools_download
+#-------------------------------------------------------------------------------
+function tools_download
+{
+    local PACKAGES="debootstrap"
+
+    local TOOLS_STATE_DIR="${TOOLS_DIR}/.state"
+    local TOOLS_CACHE_DIR="${TOOLS_DIR}/.cache"
+    local TOOLS_ARCHIVES_DIR="${TOOLS_DIR}/.archives"
+
+    mkdir -p \
+        "${TOOLS_STATE_DIR}" \
+        "${TOOLS_CACHE_DIR}" \
+        "${TOOLS_ARCHIVES_DIR}"
+
+    if ! apt-get update \
+        -o dir::state="${TOOLS_STATE_DIR}" \
+        -o dir::cache="${TOOLS_CACHE_DIR}" \
+        -o dir::cache::archives="${TOOLS_ARCHIVES_DIR}" \
+        -o debug::nolocking="true" &> /dev/null; then
+            echo "Cannot update packages list."
+    fi
+
+    for PACKAGE in ${PACKAGES}; do
+        echo "Downloading: ${PACKAGE}"
+
+        if ! apt-get install \
+            --no-install-recommends \
+            -o debug::nolocking="true" \
+            -o dir::state="${TOOLS_STATE_DIR}" \
+            -o dir::cache="${TOOLS_CACHE_DIR}" \
+            -o dir::cache::archives="${TOOLS_ARCHIVES_DIR}" \
+            -d -y "${PACKAGE}" &> /dev/null; then
+                echo "Cannot download package: ${PACKAGE}"
+        fi
+
+        local ARCHIVES="${TOOLS_ARCHIVES_DIR}/*.deb"
+
+        for ARCHIVE in ${ARCHIVES}; do
+            dpkg-deb -x "${ARCHIVE}" "${TOOLS_DIR}/${PACKAGE}"
+        done
+    done
+
+    rm -rf "${TOOLS_ARCHIVES_DIR}"
+    rm -rf "${TOOLS_CACHE_DIR}"
+    rm -rf "${TOOLS_STATE_DIR}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: base_list
+#-------------------------------------------------------------------------------
+function base_list
+{
+    local BASES="${BASES_DIR}/*"
+
+    for BASE in ${BASES}; do
+        basename "${BASE}"
+    done
+}
+
+#-------------------------------------------------------------------------------
+# Function: base_create <distro> <release>
+#-------------------------------------------------------------------------------
+function base_create
+{
+    local BASE_DISTRO="${1}"
+    local BASE_RELEASE="${2}"
+
+    if [ -z "${BASE_DISTRO}" ] || [ -z "${BASE_RELEASE}" ]; then
+        echo "$(basename "${0}"): base-create <distro> <release>"
+        exit
+    fi
+
+    local BASE_DIR="${BASES_DIR}/${BASE_DISTRO}-${BASE_RELEASE}"
+
+    if [ -d "${BASE_DIR}" ]; then
+        echo "$(basename "${0}"): base $(basename "${BASE_DIR}") exists."
+        return
+    fi
+
+    local BASE_ARCH="amd64"
+    local BASE_VARIANT="minbase"
+
+    if [ "${BASE_DISTRO}" = "debian" ]; then
+        local BASE_URL="http://deb.debian.org/debian"
+    else
+        echo "$(basename "${0}"): distro ${BASE_DISTRO} is not supported."
+        return
+    fi
+
+    local TOOLS_DEBOOTSTRAP="${TOOLS_DIR}/debootstrap"
+    local TOOLS_DEBOOTSTRAP_PATH="${TOOLS_DEBOOTSTRAP}/usr/bin"
+    local TOOLS_DEBOOTSTRAP_BIN="${TOOLS_DEBOOTSTRAP}/usr/sbin/debootstrap"
+    local TOOLS_DEBOOTSTRAP_DIR="${TOOLS_DEBOOTSTRAP}/usr/share/debootstrap"
+    local TOOLS_DEBOOTSTRAP_LD="${TOOLS_DEBOOTSTRAP}/usr/lib/x86_64-linux-gnu"
+
+    export DEBOOTSTRAP_DIR="${TOOLS_DEBOOTSTRAP_DIR}"
+    export LD_LIBRARY_PATH="${TOOLS_DEBOOTSTRAP_LD}"
+    export PATH="${TOOLS_DEBOOTSTRAP_PATH}:${PATH}"
+
+    "${TOOLS_DEBOOTSTRAP_BIN}"        \
+        --arch      "${BASE_ARCH}"    \
+        --variant   "${BASE_VARIANT}" \
+        "${BASE_RELEASE}"             \
+        "${BASE_DIR}"                 \
+        "${BASE_URL}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: base_update <name>
+#-------------------------------------------------------------------------------
+function base_update
+{
+    local BASE_NAME="${1}"
+
+    if [ -z "${BASE_NAME}" ]; then
+        echo "$(basename "${0}"): base-update <name>"
+        exit
+    fi
+
+    local BASE_DIR="${BASES_DIR}/${BASE_NAME}"
+
+    if [ ! -d "${BASE_DIR}" ]; then
+        echo "$(basename "${0}"): base $(basename "${BASE_DIR}") does not exist."
+        return
+    fi
+
+    local COMMAND="                 \
+        apt-get update;             \
+        apt-get dist-upgrade -y;    \
+        apt-get autoremove -y;      \
+        apt-get clean;"
+
+    "${BIN}" --directory "${BASE_DIR}" --command "${COMMAND}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: container_list
+#-------------------------------------------------------------------------------
+function container_list
+{
+    local CONTAINERS="${CONTAINERS_DIR}/*"
+
+    for CONTAINER in ${CONTAINERS}; do
+        basename "${CONTAINER}"
+    done
+}
+
+#-------------------------------------------------------------------------------
+# Function: container_create <name> <base>
+#-------------------------------------------------------------------------------
+function container_create
+{
+    local CONTAINER_NAME="${1}"
+    local CONTAINER_BASE="${2}"
+
+    if [ -z "${CONTAINER_NAME}" ] || [ -z "${CONTAINER_BASE}" ]; then
+        echo "$(basename "${0}"): container-create <name> <base>"
+        exit
+    fi
+
+    local CONTAINER_DIR="${CONTAINERS_DIR}/${CONTAINER_NAME}"
+
+    if [ -d "${CONTAINER_DIR}" ]; then
+        echo "$(basename "${0}"): container ${CONTAINER_NAME} exists."
+        return
+    fi
+
+    local CONTAINER_BASE_DIR="${BASES_DIR}/${CONTAINER_BASE}"
+
+    if [ ! -d "${CONTAINER_BASE_DIR}" ]; then
+        echo "$(basename "${0}"): base ${CONTAINER_BASE} does not exist."
+        return
+    fi
+
+    local CONTAINER_WORK_DIR="${CONTAINER_DIR}/work"
+    local CONTAINER_MOUNT_DIR="${CONTAINER_DIR}/mount"
+    local CONTAINER_ROOTFS_DIR="${CONTAINER_DIR}/rootfs"
+
+    mkdir -p \
+        "${CONTAINER_WORK_DIR}" \
+        "${CONTAINER_MOUNT_DIR}" \
+        "${CONTAINER_ROOTFS_DIR}"
+
+    local CONTAINER_BASE_LINK="${CONTAINER_DIR}/base"
+
+    ln -s "${CONTAINER_BASE_DIR}" "${CONTAINER_BASE_LINK}"
+
+    local COMMAND="
+        echo 'nameserver 192.168.0.1'      >  /etc/resolv.conf;
+        echo 'DISPLAY=:0'                  >  /etc/environment;
+        echo '${CONTAINER_NAME}'           >  /etc/hostname;
+        echo '127.0.0.1 localhost'         >  /etc/hosts;
+        echo '127.0.0.1 ${CONTAINER_NAME}' >> /etc/hosts;
+        echo 'root\nroot' | passwd"
+
+    "${BIN}" \
+        --command   "${COMMAND}" \
+        --directory "${CONTAINER_MOUNT_DIR}" \
+        --overlay   "${CONTAINER_BASE_LINK}:${CONTAINER_ROOTFS_DIR}:${CONTAINER_WORK_DIR}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: container_destroy <name>
+#-------------------------------------------------------------------------------
+function container_destroy
+{
+    local CONTAINER_NAME="${1}"
+
+    if [ -z "${CONTAINER_NAME}" ]; then
+        echo "$(basename "${0}"): container-destroy <name>"
+        exit
+    fi
+
+    local CONTAINER_DIR="${CONTAINERS_DIR}/${CONTAINER_NAME}"
+
+    if [ ! -d "${CONTAINER_DIR}" ]; then
+        echo "$(basename "${0}"): container ${CONTAINER_NAME} does not exist."
+        return
+    fi
+
+    local CONTAINER_MOUNT_DIR="${CONTAINER_DIR}/mount"
+
+    if mountpoint -q "${CONTAINER_MOUNT_DIR}"; then
+        echo "$(basename "${0}"): container ${CONTAINER_NAME} is mounted."
+        return
+    fi
+
+    rm -rf "${CONTAINER_DIR}"
+}
+
+#-------------------------------------------------------------------------------
+# Function: container_execute <name> <username> <command>
+#-------------------------------------------------------------------------------
+function container_execute
+{
+    local CONTAINER_NAME="${1}"
+    local CONTAINER_USERNAME="${2}"
+    local CONTAINER_COMMAND="${3}"
+
+    if [ -z "${CONTAINER_NAME}"     ] ||
+       [ -z "${CONTAINER_USERNAME}" ] ||
+       [ -z "${CONTAINER_COMMAND}"  ]
+    then
+        echo "$(basename "${0}"): container-boot <name> <username> <command>"
+        exit
+    fi
+
+    local CONTAINER_DIR="${CONTAINERS_DIR}/${CONTAINER_NAME}"
+
+    if [ ! -d "${CONTAINER_DIR}" ]; then
+        echo "$(basename "${0}"): container ${CONTAINER_NAME} does not exist."
+        return
+    fi
+
+    local CONTAINER_WORK_DIR="${CONTAINER_DIR}/work"
+    local CONTAINER_BASE_LINK="${CONTAINER_DIR}/base"
+    local CONTAINER_MOUNT_DIR="${CONTAINER_DIR}/mount"
+    local CONTAINER_ROOTFS_DIR="${CONTAINER_DIR}/rootfs"
+
+    xhost +local: &> /dev/null
+
+    "${BIN}"                                                                   \
+        --command   "${CONTAINER_COMMAND}"                                     \
+        --username  "${CONTAINER_USERNAME}"                                    \
+        --directory "${CONTAINER_MOUNT_DIR}"                                   \
+        --overlay   "${CONTAINER_BASE_LINK}:${CONTAINER_ROOTFS_DIR}:${CONTAINER_WORK_DIR}" \
+        --binding   "/dev/dri"                                                 \
+        --binding   "/dev/snd"                                                 \
+        --binding   "/dev/shm"                                                 \
+        --binding   "/tmp/.X11-unix"
+}
+
+#-------------------------------------------------------------------------------
+# Function: main <arguments>
+#-------------------------------------------------------------------------------
+function main
+{
+    local TOOLS_DIR="${DIR}/tools"
+    local BASES_DIR="${DIR}/bases"
+    local CONTAINERS_DIR="${DIR}/containers"
+
+    if [ ! -d "${TOOLS_DIR}" ]; then
+        check_sudo "$(basename "${0}")"
+        tools_download
+    fi
+
+    local COMMAND="${1}"
+    local COMMAND_ARGUMENTS=("${@:2}")
+    local COMMAND_ARGUMENTS_COUNT="${#}"
+
+    while [ "${COMMAND_ARGUMENTS_COUNT}" -gt 0 ]; do
+        case "${COMMAND}" in
+            "--base-list")
+                base_list
+                shift;;
+
+            "--base-create")
+                check_sudo "${COMMAND}"
+                base_create \
+                    "${COMMAND_ARGUMENTS[0]}" \
+                    "${COMMAND_ARGUMENTS[1]}"
+                shift 3;;
+
+            "--base-update")
+                check_sudo "${COMMAND}"
+                base_update \
+                    "${COMMAND_ARGUMENTS[0]}"
+                shift 2;;
+
+            "--container-list")
+                container_list
+                shift;;
+
+            "--container-create")
+                check_sudo "${COMMAND}"
+                container_create \
+                    "${COMMAND_ARGUMENTS[0]}" \
+                    "${COMMAND_ARGUMENTS[1]}"
+                shift 3;;
+
+            "--container-destroy")
+                check_sudo "${COMMAND}"
+                container_destroy \
+                    "${COMMAND_ARGUMENTS[0]}"
+                shift 2;;
+
+            "--container-execute")
+                check_sudo "${COMMAND}"
+                container_execute \
+                    "${COMMAND_ARGUMENTS[0]}" \
+                    "${COMMAND_ARGUMENTS[1]}" \
+                    "${COMMAND_ARGUMENTS[2]}"
+                shift 4;;
+
+            *)
+                echo "$(basename "${0}"): unknown command ${COMMAND}"
+                exit;;
+        esac
+
+        COMMAND="${1}"
+        COMMAND_ARGUMENTS=("${@:2}")
+        COMMAND_ARGUMENTS_COUNT="${#}"
+    done
+}
+
+main "${@}"
